@@ -38,30 +38,21 @@
   <div id="main" class="grid">Loading Menu...</div>
 
   <script>
-    // From your diagnostics: Parent Origin is https://dev.teebase.net
     const GristOrigin = "https://dev.teebase.net";
-    let currentDocId = "";
-
+    
     grist.ready({ requiredAccess: 'full' });
 
     async function buildMenu() {
       try {
-        // Get Doc ID from URL instead of blocked Metadata API
-        const urlParams = new URLSearchParams(window.location.search);
-        // Fallback: try to extract docId from the URL or Grist API
-        currentDocId = await grist.docApi.getDocName();
-
         const main = document.getElementById('main');
         
-        // Fetch User Table to check admin status
+        // Fetch User Table for Admin Check
         try {
           const sysUsers = await grist.docApi.fetchTable('SysUsers');
-          // Since we can't get current user email via blocked Metadata, 
-          // we look for any record where Unlock_Structure is true.
-          // If the table is accessible, we show the button.
-          const isAdmin = sysUsers.Unlock_Structure.some(val => val === true);
-          if (isAdmin) document.getElementById('admin-sync').style.display = 'block';
-        } catch(e) { console.log("Admin button hidden: SysUsers not reachable."); }
+          if (sysUsers.Unlock_Structure.some(v => v === true)) {
+            document.getElementById('admin-sync').style.display = 'block';
+          }
+        } catch(e) { console.warn("Admin check skipped."); }
 
         // Fetch our Menu table
         const records = await grist.docApi.fetchTable('SysNavigationMenu');
@@ -71,15 +62,14 @@
           return;
         }
 
-        document.body.style.setProperty('--cols', records.Columns[0] || 3);
+        const cols = records.Columns && records.Columns[0] ? records.Columns[0] : 3;
+        document.body.style.setProperty('--cols', cols);
         main.innerHTML = '';
         const groups = {};
 
         records.id.forEach((id, i) => {
-          const section = records.Section[i];
-          if (section === "HIDDEN" || !records.Label[i]) return;
-          
-          const sec = section || 'General';
+          if (records.Section[i] === "HIDDEN" || !records.Label[i]) return;
+          const sec = records.Section[i] || 'General';
           if (!groups[sec]) groups[sec] = [];
           groups[sec].push({
             label: records.Label[i],
@@ -91,7 +81,6 @@
         Object.keys(groups).sort().forEach(sec => {
           const h = document.createElement('div'); h.className = 'section-header'; h.innerHTML = sec;
           main.appendChild(h);
-          
           groups[sec].sort((a,b) => a.order - b.order).forEach(item => {
             const a = document.createElement('a');
             a.className = 'menu-item';
@@ -102,10 +91,8 @@
             main.appendChild(a);
           });
         });
-
       } catch (e) {
-        document.getElementById('main').innerHTML = "Error loading table data. Ensure table ID is 'SysNavigationMenu'.";
-        console.error(e);
+        document.getElementById('main').innerHTML = "Ready for Sync. Ensure table ID is 'SysNavigationMenu'.";
       }
     }
 
@@ -115,28 +102,35 @@
         btn.innerText = "Syncing...";
         const sysPages = await grist.docApi.fetchTable('_grist_Pages');
         const sysViews = await grist.docApi.fetchTable('_grist_Views');
+        const currentDocId = await grist.docApi.getDocName();
         
-        const toAdd = { Section: [], Label: [], Link: [], Sort_Order: [], Columns: [] };
+        const recordsToAdd = [];
 
         sysPages.id.forEach((pid, i) => {
-          const vRef = sysPages.viewRef[i];
-          const vIdx = sysViews.id.indexOf(vRef);
-          const vName = sysViews.name[vIdx];
-          
+          const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
           if (vName && !vName.startsWith('Grist')) {
-            toAdd.Section.push("NEW 🛠️");
-            toAdd.Label.push(vName);
-            toAdd.Link.push(`/p/${pid}`);
-            toAdd.Sort_Order.push(999);
-            toAdd.Columns.push(4);
+            recordsToAdd.push({
+              Section: "NEW 🛠️",
+              Label: vName,
+              Link: `/doc/${currentDocId}/p/${pid}`,
+              Sort_Order: 999,
+              Columns: 4
+            });
           }
         });
 
-        await grist.docApi.addRecords('SysNavigationMenu', toAdd);
-        alert("Sync Complete! Added " + toAdd.Label.length + " items.");
-        location.reload(); 
+        if (recordsToAdd.length > 0) {
+          // Using the more compatible table-scoped call
+          const table = grist.getTable('SysNavigationMenu');
+          await table.addRecords(recordsToAdd);
+          alert(`Sync Complete! Added ${recordsToAdd.length} items.`);
+          location.reload(); 
+        } else {
+          alert("No new pages found.");
+        }
       } catch (e) {
         alert("Sync Error: " + e.message);
+        console.error(e);
       } finally {
         btn.innerText = "🔄 Sync System Pages";
       }
