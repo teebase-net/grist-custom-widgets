@@ -21,7 +21,7 @@
       cursor: pointer; transition: background 0.1s; user-select: none;
     }
     .menu-item:hover { background: var(--bg); border-color: var(--primary); }
-    .menu-item.active { border-left: 4px solid var(--active); background: var(--bg); }
+    .menu-item.active { border-left: 4px solid var(--active); background: var(--bg); font-weight: bold; }
     .label { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
   </style>
 </head>
@@ -31,14 +31,14 @@
 
   <script>
     const CACHE_KEY = "grist_menu_cache";
-    let selectedPageId = null;
+    let lastKnownHash = "";
 
-    // 1. RENDERER
     function render(records) {
       if (!records || !records.length) return;
       const main = document.getElementById('main');
       const fragment = document.createDocumentFragment();
       const groups = {};
+      const currentHash = window.parent.location.hash;
 
       document.documentElement.style.setProperty('--cols', records[0].GridColumns || 3);
 
@@ -58,23 +58,27 @@
         groups[sec].sort((a,b) => (a.Sort_Order || 99) - (b.Sort_Order || 99)).forEach(item => {
           const btn = document.createElement('div');
           const pageMatch = item.Link.match(/\/p\/(\d+)/);
-          const pageNum = pageMatch ? parseInt(pageMatch[1]) : null;
+          const pageAnchor = pageMatch ? `p/${pageMatch[1]}` : null;
           
           btn.className = 'menu-item';
-          if (pageNum === selectedPageId) btn.classList.add('active');
+          if (pageAnchor && currentHash.includes(pageAnchor)) btn.classList.add('active');
 
           btn.onclick = () => {
-            if (pageNum) {
-              // SENIOR FIX: Use the Grist Native Navigation Action
-              // This bypasses standard URL navigation and triggers internal Grist routing
-              grist.setCursor({ pageId: pageNum }).catch(err => {
-                // Fallback if setCursor is restricted on your version
-                window.open(item.Link, '_top');
-              });
-              
-              selectedPageId = pageNum;
-              document.querySelectorAll('.menu-item').forEach(b => b.classList.remove('active'));
-              btn.classList.add('active');
+            if (pageAnchor) {
+              // SENIOR FIX: The "Hash-Only" jump.
+              // Grist's internal AppController listens for hashchange events.
+              // If we change ONLY the hash, the page does not reload.
+              try {
+                window.parent.location.hash = pageAnchor;
+                
+                // Visual feedback
+                document.querySelectorAll('.menu-item').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+              } catch (e) {
+                // If cross-origin security blocks direct hash access, 
+                // we fall back to the native Grist message bus
+                grist.setCursor({ pageId: parseInt(pageMatch[1]) });
+              }
             } else {
               window.open(item.Link, '_top');
             }
@@ -89,25 +93,26 @@
       main.appendChild(fragment);
     }
 
-    // 2. API INIT
     grist.ready({
       requiredAccess: 'full',
       columns: ["Section", "Label", "Link", "Sort_Order", "GridColumns"]
     });
 
-    // Handle incoming data
     grist.onRecords((records) => {
       localStorage.setItem(CACHE_KEY, JSON.stringify(records));
       render(records);
     });
 
-    // Listen for where the user is currently to set the "active" state
-    grist.onRecord((rec, mappings) => {
-       // This fires when the user clicks elsewhere in Grist
-       // We can use it to keep the menu synced with the current view
-    });
+    // Detect navigation done elsewhere in Grist to keep buttons in sync
+    setInterval(() => {
+      if (window.parent.location.hash !== lastKnownHash) {
+        lastKnownHash = window.parent.location.hash;
+        const cached = localStorage.getItem(CACHE_KEY);
+        if (cached) render(JSON.parse(cached));
+      }
+    }, 1000);
 
-    // Admin Sync remains the same
+    // Sync logic (Internal)
     async function runSync() {
       try {
         const [sysPages, sysViews, docId] = await Promise.all([
@@ -127,11 +132,9 @@
       } catch (e) { console.error(e); }
     }
 
-    // Initial load from cache
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) render(JSON.parse(cached));
-    
-    // Check Admin
+
     grist.on('message', (msg) => {
       if (msg.tableId === 'SysUsers' || msg.docInfo) {
         grist.docApi.fetchTable('SysUsers').then(u => {
