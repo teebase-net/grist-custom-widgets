@@ -1,125 +1,82 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8">
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
   <style>
-    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; }
-    body.dark { --bg: #1e1e1e; --text: #e8e8e8; --border: #444; --item-bg: #2c2c2c; }
-    body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 12px; background: var(--bg); color: var(--text); overflow: hidden; }
-    
-    .toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; min-height: 20px; }
-    .sync-btn { 
-       font-size: 10px; cursor: pointer; padding: 3px 8px; border: 1px solid var(--border); 
-       border-radius: 4px; background: var(--item-bg); color: var(--primary); font-weight: bold;
-    }
-
-    .grid { display: grid; gap: 10px; grid-template-columns: repeat(var(--cols, 3), 1fr); }
-    .section-header { 
-      grid-column: 1 / -1; font-size: 11px; font-weight: 800; color: var(--primary); 
-      text-transform: uppercase; margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 2px;
-    }
-    .menu-item { 
-      background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px;
-      padding: 12px 8px; text-align: center; cursor: pointer; text-decoration: none; color: inherit;
-      display: flex; align-items: center; justify-content: center; transition: all 0.1s;
-    }
-    .menu-item:hover { border-color: var(--primary); box-shadow: 2px 2px 0px var(--primary); }
-    .label { font-size: 12px; font-weight: 600; }
+    body { font-family: monospace; background: #222; color: #0f0; padding: 20px; font-size: 12px; line-height: 1.5; }
+    .error { color: #f00; font-weight: bold; }
+    .success { color: #0f0; }
+    .warning { color: #ffa500; }
+    hr { border: 0; border-top: 1px solid #444; margin: 10px 0; }
   </style>
 </head>
 <body>
-  <div class="toolbar"><div id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">🔄 Sync Pages</div></div>
-  <div id="main" class="grid">Awaiting Data...</div>
+  <div>[ SYSTEM DIAGNOSTICS RUNNING ]</div>
+  <hr>
+  <div id="log"></div>
 
   <script>
-    let currentDocId = "";
-    let baseUrl = "";
-
-    grist.ready({
-      requiredAccess: 'full',
-      columns: ["Section", "Label", "Link", "Sort_Order", "Columns"]
-    });
-
-    // 1. This reads the table you've mapped to the widget
-    grist.onRecords((records, mappings) => {
-      const main = document.getElementById('main');
-      if (!records || records.length === 0) {
-        main.innerHTML = "No menu items found. Click Sync if Admin.";
-        return;
-      }
-
-      // Set columns based on the first record
-      document.body.style.setProperty('--cols', records[0].Columns || 3);
-
-      main.innerHTML = '';
-      const groups = {};
-
-      records.forEach(rec => {
-        if (rec.Section === "HIDDEN") return;
-        const sec = rec.Section || 'Modules';
-        if (!groups[sec]) groups[sec] = [];
-        groups[sec].push(rec);
-      });
-
-      Object.keys(groups).sort().forEach(sec => {
-        const h = document.createElement('div'); h.className = 'section-header'; h.innerHTML = sec;
-        main.appendChild(h);
-        
-        groups[sec].sort((a,b) => a.Sort_Order - b.Sort_Order).forEach(item => {
-          const a = document.createElement('a');
-          a.className = 'menu-item';
-          // Use absolute URL logic
-          a.href = item.Link.startsWith('http') ? item.Link : baseUrl + item.Link;
-          a.target = '_top';
-          a.innerHTML = `<div class="label">${item.Label}</div>`;
-          main.appendChild(a);
-        });
-      });
-    });
-
-    // 2. This handles the Admin Check and Base URL
-    grist.on('message', async (msg) => {
-      if (msg.tableId || msg.docInfo) {
-        try {
-          const info = await grist.docApi.getDocMeta();
-          currentDocId = await grist.docApi.getDocName();
-          baseUrl = window.location.ancestorOrigins ? window.location.ancestorOrigins[0] : window.location.origin;
-
-          // Check Admin status from your SysUsers logic
-          const user = info.users[0].email.toLowerCase().trim();
-          const sysUsers = await grist.docApi.fetchTable('SysUsers');
-          const uIdx = sysUsers.Email.findIndex(e => String(e).toLowerCase().trim() === user);
-          
-          if (uIdx !== -1 && sysUsers.Unlock_Structure[uIdx]) {
-            document.getElementById('admin-sync').style.display = 'block';
-          }
-        } catch(e) { console.log("Admin handshake pending..."); }
-      }
-    });
-
-    async function runSync() {
-      try {
-        const sysPages = await grist.docApi.fetchTable('_grist_Pages');
-        const sysViews = await grist.docApi.fetchTable('_grist_Views');
-        const toAdd = { Section: [], Label: [], Link: [], Sort_Order: [], Columns: [] };
-
-        sysPages.id.forEach((pid, i) => {
-          const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
-          const link = `/doc/${currentDocId}/p/${pid}`;
-          if (vName && !vName.startsWith('Grist')) {
-            toAdd.Section.push("NEW 🛠️");
-            toAdd.Label.push(vName);
-            toAdd.Link.push(link);
-            toAdd.Sort_Order.push(999);
-            toAdd.Columns.push(3);
-          }
-        });
-
-        await grist.docApi.addRecords('SysNavigationMenu', toAdd);
-        alert("Sync Complete!");
-      } catch (e) { alert("Sync failed: " + e.message); }
+    function log(msg, type = '') {
+      const div = document.createElement('div');
+      div.className = type;
+      div.innerText = `> ${msg}`;
+      document.getElementById('log').appendChild(div);
+      console.log(`[Diagnostic] ${msg}`);
     }
+
+    async function runDiagnostics() {
+      log("Initializing Grist API handshake...");
+      
+      try {
+        await grist.ready({ requiredAccess: 'full' });
+        log("Grist Ready confirmed.", "success");
+      } catch (e) {
+        log("Grist Ready failed: " + e.message, "error");
+      }
+
+      // Check Document Metadata
+      try {
+        const meta = await grist.docApi.getDocMeta();
+        log("Metadata access: GRANTED", "success");
+        log("Current User: " + meta.users[0].email);
+      } catch (e) {
+        log("Metadata access: DENIED (Usually means Access Level is not 'Full')", "error");
+      }
+
+      // Check Domain/Origin
+      log("Widget URL: " + window.location.href);
+      log("Parent Origin: " + (window.location.ancestorOrigins ? window.location.ancestorOrigins[0] : "Not found"));
+
+      // Test Table Access: SysNavigationMenu
+      try {
+        log("Testing access to 'SysNavigationMenu'...");
+        const table = await grist.docApi.fetchTable('SysNavigationMenu');
+        log(`Success! Found ${table.id.length} records.`, "success");
+      } catch (e) {
+        log("Access to 'SysNavigationMenu' failed: " + e.message, "error");
+      }
+
+      // Test Table Access: SysUsers
+      try {
+        log("Testing access to 'SysUsers'...");
+        const users = await grist.docApi.fetchTable('SysUsers');
+        log(`Success! Found ${users.id.length} users.`, "success");
+      } catch (e) {
+        log("Access to 'SysUsers' failed: " + e.message, "error");
+      }
+
+      // Test System Metadata Access
+      try {
+        log("Testing access to internal '_grist_Pages'...");
+        const pages = await grist.docApi.fetchTable('_grist_Pages');
+        log(`Success! Found ${pages.id.length} internal pages.`, "success");
+      } catch (e) {
+        log("Access to '_grist_Pages' failed. (This is common if not truly 'Full Access')", "error");
+      }
+    }
+
+    runDiagnostics();
   </script>
 </body>
 </html>
