@@ -26,10 +26,13 @@
 
     async function buildMenu() {
       try {
-        const sysUsers = await grist.docApi.fetchTable('SysUsers');
+        const [sysUsers, records] = await Promise.all([
+          grist.docApi.fetchTable('SysUsers'),
+          grist.docApi.fetchTable('SysNavigationMenu')
+        ]);
+        
         if (sysUsers.Unlock_Structure.some(v => v === true)) document.getElementById('admin-sync').style.display = 'block';
         
-        const records = await grist.docApi.fetchTable('SysNavigationMenu');
         const main = document.getElementById('main');
         if (!records.id || records.id.length === 0) {
           main.innerHTML = "<div>Table empty. Click Sync.</div>";
@@ -64,38 +67,45 @@
       const btn = document.getElementById('admin-sync');
       try {
         btn.innerText = "Syncing...";
-        const [sysPages, sysViews, docId] = await Promise.all([
+        const [sysPages, sysViews, docId, existing] = await Promise.all([
           grist.docApi.fetchTable('_grist_Pages'),
           grist.docApi.fetchTable('_grist_Views'),
-          grist.docApi.getDocName()
+          grist.docApi.getDocName(),
+          grist.docApi.fetchTable('SysNavigationMenu')
         ]);
         
-        // Prepare Grist Actions
-        const actions = sysPages.id.map((pid, i) => {
-          const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
-          if (vName && !vName.startsWith('Grist')) {
-            return ["AddRecord", "SysNavigationMenu", null, {
+        const existingLinks = new Set(existing.Link || []);
+        const actions = [];
+
+        for (let i = 0; i < sysPages.id.length; i++) {
+          const pid = sysPages.id[i];
+          const vRef = sysPages.viewRef[i];
+          const vIdx = sysViews.id.indexOf(vRef);
+          const vName = sysViews.name[vIdx];
+          const fullLink = `/doc/${docId}/p/${pid}`;
+
+          // Only add if it's a real page, not a Grist system page, and not already synced
+          if (vName && !vName.startsWith('Grist') && !existingLinks.has(fullLink)) {
+            actions.push(["AddRecord", "SysNavigationMenu", null, {
               Section: "NEW 🛠️",
-              Label: vName,
-              Link: `/doc/${docId}/p/${pid}`,
+              Label: String(vName),
+              Link: String(fullLink),
               Sort_Order: 999,
               Columns: 4
-            }];
+            }]);
           }
-          return null;
-        }).filter(a => a !== null);
+        }
 
         if (actions.length > 0) {
-          // THE CORRECT API CALL:
           await grist.docApi.applyUserActions(actions);
           alert(`Sync Complete! Added ${actions.length} items.`);
           location.reload(); 
         } else {
-          alert("No new pages found.");
+          alert("All pages are already in the menu.");
         }
       } catch (e) {
-        alert("Sync Error: " + e.message);
-        console.error("Full Error:", e);
+        alert("Sync Error: Check Console (F12)");
+        console.error("Action Error Details:", e);
       } finally {
         btn.innerText = "🔄 Sync System Pages";
       }
