@@ -4,59 +4,78 @@
   <meta charset="utf-8">
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
   <style>
-    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; }
+    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; --cols: 3; }
     body.dark { --bg: #1e1e1e; --text: #e8e8e8; --border: #444; --item-bg: #2c2c2c; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 12px; background: var(--bg); color: var(--text); }
     
-    /* Hardware acceleration for smoother transitions */
-    .menu-item { will-change: transform, box-shadow; transition: transform 0.1s ease-out, box-shadow 0.1s ease-out; }
-    
-    .toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
-    .sync-btn { font-size: 10px; cursor: pointer; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--item-bg); color: var(--primary); font-weight: bold; text-transform: uppercase; }
-    
-    .grid { display: grid; gap: 12px; grid-template-columns: repeat(var(--cols, 3), 1fr); }
-    .section-header { grid-column: 1 / -1; font-size: 10px; font-weight: 800; color: var(--primary); text-transform: uppercase; margin-top: 15px; border-bottom: 2px solid var(--border); padding-bottom: 4px; letter-spacing: 0.5px; }
-    
-    .menu-item { background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px; padding: 14px 10px; text-align: center; cursor: pointer; text-decoration: none; color: inherit; display: flex; flex-direction: column; box-shadow: 1px 1px 0px var(--border); }
-    .menu-item:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: 2px 2px 0px var(--primary); }
-    .label { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    
-    #main.loading { opacity: 0.5; filter: blur(1px); }
+    body { 
+      font-family: -apple-system, system-ui, sans-serif; 
+      margin: 0; padding: 10px; 
+      background: var(--bg); color: var(--text);
+      /* Force GPU for entire body to prevent painting lag */
+      transform: translateZ(0);
+    }
+
+    .toolbar { display: flex; justify-content: flex-end; height: 20px; margin-bottom: 8px; }
+    .sync-btn { 
+      font-size: 9px; cursor: pointer; border: 1px solid var(--border); 
+      background: var(--item-bg); color: var(--primary); font-weight: bold; padding: 2px 6px;
+    }
+
+    /* Fixed Grid to prevent jumping */
+    #main { 
+      display: grid; 
+      gap: 10px; 
+      grid-template-columns: repeat(var(--cols), 1fr);
+      min-height: 100vh; /* Keeps height consistent */
+    }
+
+    .section-header { 
+      grid-column: 1 / -1; font-size: 10px; font-weight: 800; 
+      color: var(--primary); text-transform: uppercase; 
+      margin-top: 10px; border-bottom: 1px solid var(--border);
+    }
+
+    .menu-item { 
+      background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px; 
+      padding: 12px 8px; text-align: center; text-decoration: none; color: inherit;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      contain: content; /* Senior optimization: prevents internal changes from affecting outer layout */
+    }
+
+    .menu-item:hover { background: var(--bg); border-color: var(--primary); }
+    .label { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="toolbar"><button id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">🔄 Sync</button></div>
-  <div id="main" class="grid"></div>
+  <div class="toolbar"><button id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">Sync</button></div>
+  <div id="main"></div>
 
   <script>
     const GristOrigin = "https://dev.teebase.net";
-    let cachedDocId = null;
+    const CACHE_KEY = "grist_menu_cache";
 
-    // Initialize Widget with explicit column requirements
-    grist.ready({
-      requiredAccess: 'full',
-      columns: ["Section", "Label", "Link", "Sort_Order", "GridColumns"]
-    });
-
-    // REACTIVE UPDATE: This triggers instantly when Grist data changes
-    grist.onRecords((records) => {
-      const main = document.getElementById('main');
-      if (!records || records.length === 0) {
-        main.innerHTML = "<div>Menu empty. Run Sync.</div>";
-        return;
+    // 1. INSTANT HYDRATION
+    // Load from local storage before the API even starts
+    function hydrate() {
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        render(JSON.parse(cached));
       }
+    }
 
-      // 1. Set Grid Config
-      const gridCols = records[0].GridColumns || 3;
-      document.body.style.setProperty('--cols', gridCols);
-
-      // 2. Build Fragment (In-memory) to prevent flicker
+    function render(records) {
+      if (!records || !records.length) return;
+      
+      const main = document.getElementById('main');
       const fragment = document.createDocumentFragment();
       const groups = {};
 
+      // Set columns instantly
+      document.documentElement.style.setProperty('--cols', records[0].GridColumns || 3);
+
       records.forEach(rec => {
         if (rec.Section === "HIDDEN") return;
-        const sec = rec.Section || 'General';
+        const sec = rec.Section || 'Menu';
         if (!groups[sec]) groups[sec] = [];
         groups[sec].push(rec);
       });
@@ -67,7 +86,7 @@
         h.textContent = sec;
         fragment.appendChild(h);
 
-        groups[sec].sort((a,b) => (a.Sort_Order || 999) - (b.Sort_Order || 999)).forEach(item => {
+        groups[sec].sort((a,b) => (a.Sort_Order || 99) - (b.Sort_Order || 99)).forEach(item => {
           const a = document.createElement('a');
           a.className = 'menu-item';
           const path = item.Link.startsWith('/') ? item.Link : '/' + item.Link;
@@ -78,56 +97,54 @@
         });
       });
 
-      // 3. Single DOM Swap
       main.innerHTML = '';
       main.appendChild(fragment);
-      main.classList.remove('loading');
+    }
+
+    // 2. BACKGROUND API SYNC
+    grist.ready({
+      requiredAccess: 'full',
+      columns: ["Section", "Label", "Link", "Sort_Order", "GridColumns"]
     });
 
-    // Check Admin Status once on load
+    grist.onRecords((records) => {
+      // Save to cache for next load
+      localStorage.setItem(CACHE_KEY, JSON.stringify(records));
+      // Re-render only if data has actually changed (prevents flickers)
+      render(records);
+    });
+
+    // Check Admin in background
     grist.on('message', (msg) => {
       if (msg.tableId === 'SysUsers' || msg.docInfo) {
-        grist.docApi.fetchTable('SysUsers').then(users => {
-           if (users.Unlock_Structure.some(v => v === true)) {
-             document.getElementById('admin-sync').style.display = 'block';
-           }
+        grist.docApi.fetchTable('SysUsers').then(u => {
+          if (u.Unlock_Structure.some(v => v === true)) document.getElementById('admin-sync').style.display = 'block';
         }).catch(() => {});
       }
     });
 
     async function runSync() {
-      const btn = document.getElementById('admin-sync');
       try {
-        btn.innerText = "Syncing...";
         const [sysPages, sysViews, docId] = await Promise.all([
           grist.docApi.fetchTable('_grist_Pages'),
           grist.docApi.fetchTable('_grist_Views'),
           grist.docApi.getDocName()
         ]);
-        
-        const actions = [];
-        sysPages.id.forEach((pid, i) => {
+        const actions = sysPages.id.map((pid, i) => {
           const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
-          if (vName && !vName.startsWith('Grist')) {
-            actions.push(["AddRecord", "SysNavigationMenu", null, {
-              Section: "NEW 🛠️",
-              Label: String(vName),
-              Link: `/doc/${docId}/p/${pid}`,
-              Sort_Order: 999,
-              GridColumns: 3
-            }]);
-          }
-        });
-
-        if (actions.length > 0) {
-          await grist.docApi.applyUserActions(actions);
-        }
-      } catch (e) {
-        alert(`Sync Error: ${e.message}`);
-      } finally {
-        btn.innerText = "🔄 Sync";
-      }
+          return (vName && !vName.startsWith('Grist')) ? 
+            ["AddRecord", "SysNavigationMenu", null, { 
+              Section: "NEW 🛠️", Label: String(vName), 
+              Link: `/doc/${docId}/p/${pid}`, 
+              Sort_Order: 999, GridColumns: 3 
+            }] : null;
+        }).filter(a => a);
+        if (actions.length) await grist.docApi.applyUserActions(actions);
+      } catch (e) { console.error(e); }
     }
+
+    // Initialize
+    hydrate();
   </script>
 </body>
 </html>
