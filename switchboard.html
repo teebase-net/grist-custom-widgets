@@ -7,46 +7,75 @@
     :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; }
     body.dark { --bg: #1e1e1e; --text: #e8e8e8; --border: #444; --item-bg: #2c2c2c; }
     body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 12px; background: var(--bg); color: var(--text); overflow-x: hidden; }
+    
+    #diag-panel { font-size: 10px; background: #000; color: #0f0; padding: 5px; margin-bottom: 10px; display: none; border-radius: 4px; border: 1px solid #333; }
+    
     .toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; min-height: 24px; }
     .sync-btn { font-size: 11px; cursor: pointer; padding: 5px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--item-bg); color: var(--primary); font-weight: bold; text-transform: uppercase; }
+    
     .grid { display: grid; gap: 12px; grid-template-columns: repeat(var(--cols, 3), 1fr); }
     .section-header { grid-column: 1 / -1; font-size: 11px; font-weight: 800; color: var(--primary); text-transform: uppercase; margin-top: 15px; border-bottom: 2px solid var(--border); padding-bottom: 4px; }
-    .menu-item { background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px; padding: 14px 10px; text-align: center; cursor: pointer; text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: all 0.1s; }
+    .menu-item { background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px; padding: 14px 10px; text-align: center; cursor: pointer; text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: all 0.1s; box-shadow: 1px 1px 0px var(--border); }
     .menu-item:hover { border-color: var(--primary); transform: translate(-1px, -1px); box-shadow: 3px 3px 0px var(--primary); }
     .label { font-size: 13px; font-weight: 600; }
   </style>
 </head>
 <body>
+  <div id="diag-panel">DEBUG MODE: [Active]</div>
   <div class="toolbar"><button id="admin-sync" class="sync-btn" onclick="runSync()">🔄 Sync System Pages</button></div>
-  <div id="main" class="grid">Loading...</div>
+  <div id="main" class="grid">Initializing...</div>
 
   <script>
+    const DEBUG_MODE = true; 
     const GristOrigin = "https://dev.teebase.net";
+    
+    if(DEBUG_MODE) document.getElementById('diag-panel').style.display = 'block';
+
+    function debugLog(msg, data = null) {
+      if (!DEBUG_MODE) return;
+      console.log(`[Senior-Diag] ${msg}`, data || '');
+      const panel = document.getElementById('diag-panel');
+      panel.innerText = `DEBUG: ${msg}`;
+    }
+
     grist.ready({ requiredAccess: 'full' });
 
     async function buildMenu() {
       try {
+        debugLog("Requesting table data...");
         const [sysUsers, records] = await Promise.all([
           grist.docApi.fetchTable('SysUsers'),
           grist.docApi.fetchTable('SysNavigationMenu')
         ]);
         
-        if (sysUsers.Unlock_Structure.some(v => v === true)) document.getElementById('admin-sync').style.display = 'block';
+        debugLog("Data received.", { users: sysUsers.id.length, menu: records.id.length });
+
+        // Check Admin Status
+        if (sysUsers.Unlock_Structure.some(v => v === true)) {
+          document.getElementById('admin-sync').style.display = 'block';
+        }
         
         const main = document.getElementById('main');
         if (!records.id || records.id.length === 0) {
-          main.innerHTML = "<div>Table empty. Click Sync.</div>";
+          main.innerHTML = "<div>Menu table is empty. Click Sync.</div>";
           return;
         }
 
-        document.body.style.setProperty('--cols', records.Columns[0] || 3);
+        // Schema-specific access: GridColumns
+        const gridCols = (records.GridColumns && records.GridColumns[0]) ? records.GridColumns[0] : 3;
+        document.body.style.setProperty('--cols', gridCols);
+        
         main.innerHTML = '';
         const groups = {};
         records.id.forEach((id, i) => {
           if (records.Section[i] === "HIDDEN") return;
           const sec = records.Section[i] || 'General';
           if (!groups[sec]) groups[sec] = [];
-          groups[sec].push({ label: records.Label[i], link: records.Link[i], order: records.Sort_Order[i] || 999 });
+          groups[sec].push({ 
+            label: records.Label[i], 
+            link: records.Link[i], 
+            order: Number(records.Sort_Order[i]) || 999 
+          });
         });
 
         Object.keys(groups).sort().forEach(sec => {
@@ -60,13 +89,18 @@
             main.appendChild(a);
           });
         });
-      } catch (e) { document.getElementById('main').innerHTML = "Ready for Sync."; }
+      } catch (e) {
+        debugLog("Build Error", e.message);
+        document.getElementById('main').innerHTML = `<b>Configuration Error:</b> ${e.message}`;
+      }
     }
 
     async function runSync() {
       const btn = document.getElementById('admin-sync');
       try {
         btn.innerText = "Syncing...";
+        debugLog("Validating current schema...");
+        
         const [sysPages, sysViews, docId, existing] = await Promise.all([
           grist.docApi.fetchTable('_grist_Pages'),
           grist.docApi.fetchTable('_grist_Views'),
@@ -78,34 +112,32 @@
         const actions = [];
 
         for (let i = 0; i < sysPages.id.length; i++) {
-          const pid = sysPages.id[i];
-          const vRef = sysPages.viewRef[i];
-          const vIdx = sysViews.id.indexOf(vRef);
-          const vName = sysViews.name[vIdx];
-          const fullLink = `/doc/${docId}/p/${pid}`;
+          const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
+          const fullLink = `/doc/${docId}/p/${sysPages.id[i]}`;
 
-          // Only add if it's a real page, not a Grist system page, and not already synced
           if (vName && !vName.startsWith('Grist') && !existingLinks.has(fullLink)) {
+            // Strictly following SysNavigationMenu class definition
             actions.push(["AddRecord", "SysNavigationMenu", null, {
               Section: "NEW 🛠️",
               Label: String(vName),
               Link: String(fullLink),
-              Sort_Order: 999,
-              Columns: 4
+              Sort_Order: 999,      // Numeric
+              GridColumns: 3        // Numeric
             }]);
           }
         }
 
         if (actions.length > 0) {
+          debugLog(`Applying ${actions.length} AddRecord actions...`);
           await grist.docApi.applyUserActions(actions);
           alert(`Sync Complete! Added ${actions.length} items.`);
           location.reload(); 
         } else {
-          alert("All pages are already in the menu.");
+          alert("No new pages discovered.");
         }
       } catch (e) {
-        alert("Sync Error: Check Console (F12)");
-        console.error("Action Error Details:", e);
+        debugLog("Sync failure", e.message);
+        alert(`Sync Error: ${e.message}`);
       } finally {
         btn.innerText = "🔄 Sync System Pages";
       }
