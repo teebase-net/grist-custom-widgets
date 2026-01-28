@@ -4,144 +4,119 @@
   <meta charset="utf-8">
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
   <style>
-    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; --active: #f1c40f; --cols: 3; }
+    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; --cols: 3; }
     body.dark { --bg: #1e1e1e; --text: #e8e8e8; --border: #444; --item-bg: #2c2c2c; }
-    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 10px; background: var(--bg); color: var(--text); overflow: hidden; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 10px; background: var(--bg); color: var(--text); overflow-x: hidden; }
     
-    .toolbar { display: flex; justify-content: flex-end; height: 18px; margin-bottom: 8px; }
-    .sync-btn { font-size: 8px; cursor: pointer; border: 1px solid var(--border); background: var(--item-bg); color: var(--primary); font-weight: bold; padding: 1px 4px; opacity: 0.6; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .v-tag { font-size: 8px; color: #2ecc71; border: 1px solid #2ecc71; padding: 1px 4px; border-radius: 3px; font-weight: bold; }
+    .sync-btn { font-size: 9px; cursor: pointer; border: 1px solid var(--border); background: var(--item-bg); color: var(--primary); font-weight: bold; padding: 2px 6px; display: none; }
 
-    #main { display: grid; gap: 10px; grid-template-columns: repeat(var(--cols), 1fr); }
-    .section-header { grid-column: 1 / -1; font-size: 10px; font-weight: 800; color: var(--primary); text-transform: uppercase; margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
+    #main { display: grid; gap: 8px; grid-template-columns: repeat(var(--cols), 1fr); }
+    .section-header { grid-column: 1 / -1; font-size: 10px; font-weight: 800; color: var(--primary); text-transform: uppercase; margin-top: 8px; border-bottom: 1px solid var(--border); }
 
     .menu-item { 
       background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px; 
-      padding: 12px 8px; text-align: center; color: inherit;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      cursor: pointer; transition: background 0.1s; user-select: none;
+      padding: 12px 6px; text-align: center; cursor: pointer; transition: all 0.1s;
     }
-    .menu-item:hover { background: var(--bg); border-color: var(--primary); }
-    .menu-item.active { border-left: 4px solid var(--active); background: var(--bg); font-weight: bold; }
-    .label { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+    .menu-item:hover { background: var(--bg); border-color: var(--primary); transform: translateY(-1px); }
+    .label { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    
+    #log { font-size: 8px; color: #999; margin-top: 10px; font-family: monospace; border-top: 1px solid #eee; padding-top: 4px; }
   </style>
 </head>
 <body>
-  <div class="toolbar"><button id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">Sync</button></div>
+  <div class="toolbar">
+    <span class="v-tag">v1.1.0-ULTRA</span>
+    <button id="admin-sync" class="sync-btn" onclick="runSync()">RE-SYNC PAGES</button>
+  </div>
   <div id="main"></div>
+  <div id="log">Status: Initializing...</div>
 
   <script>
-    const CACHE_KEY = "grist_menu_cache";
-    let lastKnownHash = "";
+    const CACHE_KEY = "grist_switchboard_v1";
+    const status = (m) => document.getElementById('log').innerText = "Status: " + m;
 
     function render(records) {
-      if (!records || !records.length) return;
       const main = document.getElementById('main');
-      const fragment = document.createDocumentFragment();
-      const groups = {};
-      const currentHash = window.parent.location.hash;
-
+      if (!records || !records.length) { status("No data."); return; }
+      
       document.documentElement.style.setProperty('--cols', records[0].GridColumns || 3);
+      const frag = document.createDocumentFragment();
+      const groups = {};
 
-      records.forEach(rec => {
-        if (rec.Section === "HIDDEN") return;
-        const sec = rec.Section || 'Menu';
-        if (!groups[sec]) groups[sec] = [];
-        groups[sec].push(rec);
+      records.forEach(r => {
+        if (r.Section === "HIDDEN") return;
+        const s = r.Section || 'Menu';
+        if (!groups[s]) groups[s] = [];
+        groups[s].push(r);
       });
 
-      Object.keys(groups).sort().forEach(sec => {
-        const h = document.createElement('div');
-        h.className = 'section-header';
-        h.textContent = sec;
-        fragment.appendChild(h);
-
-        groups[sec].sort((a,b) => (a.Sort_Order || 99) - (b.Sort_Order || 99)).forEach(item => {
+      Object.keys(groups).sort().forEach(s => {
+        const h = document.createElement('div'); h.className = 'section-header'; h.textContent = s;
+        frag.appendChild(h);
+        groups[s].sort((a,b) => (a.Sort_Order || 99) - (b.Sort_Order || 99)).forEach(item => {
           const btn = document.createElement('div');
-          const pageMatch = item.Link.match(/\/p\/(\d+)/);
-          const pageAnchor = pageMatch ? `p/${pageMatch[1]}` : null;
-          
           btn.className = 'menu-item';
-          if (pageAnchor && currentHash.includes(pageAnchor)) btn.classList.add('active');
-
+          btn.innerHTML = `<div class="label">${item.Label}</div>`;
+          
           btn.onclick = () => {
-            if (pageAnchor) {
-              // SENIOR FIX: The "Hash-Only" jump.
-              // Grist's internal AppController listens for hashchange events.
-              // If we change ONLY the hash, the page does not reload.
-              try {
-                window.parent.location.hash = pageAnchor;
-                
-                // Visual feedback
-                document.querySelectorAll('.menu-item').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-              } catch (e) {
-                // If cross-origin security blocks direct hash access, 
-                // we fall back to the native Grist message bus
-                grist.setCursor({ pageId: parseInt(pageMatch[1]) });
-              }
+            const match = item.Link.match(/\/p\/(\d+)/);
+            if (match) {
+              const pId = parseInt(match[1]);
+              status("Pivoting to Page " + pId);
+              // NATIVE NAVIGATION: No reload, instant swap
+              grist.setCursor({ pageId: pId }).catch(e => {
+                 status("Nav Error. Force reload...");
+                 window.open(item.Link, '_top');
+              });
             } else {
               window.open(item.Link, '_top');
             }
           };
-
-          btn.innerHTML = `<div class="label">${item.Label}</div>`;
-          fragment.appendChild(btn);
+          frag.appendChild(btn);
         });
       });
-
-      main.innerHTML = '';
-      main.appendChild(fragment);
+      main.innerHTML = ''; main.appendChild(frag);
     }
 
-    grist.ready({
-      requiredAccess: 'full',
-      columns: ["Section", "Label", "Link", "Sort_Order", "GridColumns"]
+    grist.ready({ requiredAccess: 'full', columns: ["Section", "Label", "Link", "Sort_Order", "GridColumns"] });
+
+    grist.onRecords((recs) => {
+      status("Connected to Grist.");
+      localStorage.setItem(CACHE_KEY, JSON.stringify(recs));
+      render(recs);
     });
 
-    grist.onRecords((records) => {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(records));
-      render(records);
+    // Check for admin permission to show Sync button
+    grist.on('message', () => {
+      grist.docApi.fetchTable('SysUsers').then(u => {
+        if (u.Unlock_Structure.some(v => v === true)) document.getElementById('admin-sync').style.display = 'block';
+      }).catch(() => {});
     });
 
-    // Detect navigation done elsewhere in Grist to keep buttons in sync
-    setInterval(() => {
-      if (window.parent.location.hash !== lastKnownHash) {
-        lastKnownHash = window.parent.location.hash;
-        const cached = localStorage.getItem(CACHE_KEY);
-        if (cached) render(JSON.parse(cached));
-      }
-    }, 1000);
-
-    // Sync logic (Internal)
     async function runSync() {
+      status("Syncing tables...");
       try {
-        const [sysPages, sysViews, docId] = await Promise.all([
+        const [pages, views, docId] = await Promise.all([
           grist.docApi.fetchTable('_grist_Pages'),
           grist.docApi.fetchTable('_grist_Views'),
           grist.docApi.getDocName()
         ]);
-        const actions = sysPages.id.map((pid, i) => {
-          const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
-          return (vName && !vName.startsWith('Grist')) ? 
-            ["AddRecord", "SysNavigationMenu", null, { 
-              Section: "NEW 🛠️", Label: String(vName), Link: `/doc/${docId}/p/${pid}`, 
-              Sort_Order: 999, GridColumns: 3 
-            }] : null;
+        const acts = pages.id.map((pid, i) => {
+          const v = views.name[views.id.indexOf(pages.viewRef[i])];
+          return (v && !v.startsWith('Grist')) ? ["AddRecord", "SysNavigationMenu", null, { 
+            Section: "NEW", Label: String(v), Link: `/doc/${docId}/p/${pid}`, Sort_Order: 999, GridColumns: 3 
+          }] : null;
         }).filter(a => a);
-        if (actions.length) await grist.docApi.applyUserActions(actions);
-      } catch (e) { console.error(e); }
+        if (acts.length) await grist.docApi.applyUserActions(acts);
+        status("Sync Complete!");
+      } catch (e) { status("Sync Error: " + e.message); }
     }
 
+    // Immediate Boot from Cache
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) render(JSON.parse(cached));
-
-    grist.on('message', (msg) => {
-      if (msg.tableId === 'SysUsers' || msg.docInfo) {
-        grist.docApi.fetchTable('SysUsers').then(u => {
-          if (u.Unlock_Structure.some(v => v === true)) document.getElementById('admin-sync').style.display = 'block';
-        }).catch(() => {});
-      }
-    });
   </script>
 </body>
 </html>
