@@ -4,165 +4,138 @@
   <meta charset="utf-8">
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
   <style>
-    :root { 
-      --primary: #5dade2; 
-      --bg: #ffffff; 
-      --text: #333; 
-      --border: #ddd; 
-      --item-bg: #fdffdf; /* Light yellow tint like classic Access forms */
-    }
-    body.dark { 
-      --bg: #1e1e1e; 
-      --text: #e8e8e8; 
-      --border: #444; 
-      --item-bg: #2c2c2c; 
-    }
+    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; }
+    body.dark { --bg: #1e1e1e; --text: #e8e8e8; --border: #444; --item-bg: #2c2c2c; }
+    body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 12px; background: var(--bg); color: var(--text); scrollbar-width: none; }
     
-    body { 
-      font-family: -apple-system, Segoe UI, sans-serif; 
-      margin: 0; padding: 12px; 
-      background: var(--bg); color: var(--text); 
-      scrollbar-width: none;
+    .toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; min-height: 24px; }
+    .sync-btn { 
+      display: none; font-size: 10px; cursor: pointer; padding: 4px 8px; border: 1px solid var(--border); 
+      border-radius: 4px; background: var(--item-bg); color: var(--primary); font-weight: bold;
+      text-transform: uppercase;
     }
-    
-    .grid { 
-      display: grid; 
-      gap: 12px; 
-      grid-template-columns: repeat(var(--cols, 3), 1fr); 
-    }
-    
+    .sync-btn:hover { background: var(--primary); color: white; }
+
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(var(--cols, 3), 1fr); }
     .section-header { 
-      grid-column: 1 / -1; 
-      font-size: 12px; 
-      font-weight: 800; 
-      color: var(--primary); 
-      text-transform: uppercase; 
-      margin-top: 18px; 
-      border-bottom: 2px solid var(--border); 
-      padding-bottom: 4px;
-      display: flex;
-      align-items: center;
+      grid-column: 1 / -1; font-size: 12px; font-weight: 800; color: var(--primary); 
+      text-transform: uppercase; margin-top: 18px; border-bottom: 2px solid var(--border); padding-bottom: 4px;
     }
     
     .menu-item { 
-      background: var(--item-bg); 
-      border: 1px solid var(--border); 
-      border-radius: 4px; /* Sharper corners for a database-app feel */
-      padding: 16px 10px; 
-      text-align: center; 
-      cursor: pointer; 
-      text-decoration: none; 
-      color: inherit;
-      display: flex; 
-      flex-direction: column; 
-      align-items: center; 
-      justify-content: center;
-      transition: all 0.1s ease-in-out;
-      box-shadow: 1px 1px 0px var(--border);
+      background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px;
+      padding: 16px 10px; text-align: center; cursor: pointer; text-decoration: none; color: inherit;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      transition: all 0.1s; box-shadow: 1px 1px 0px var(--border);
     }
-
-    .menu-item:hover { 
-      border-color: var(--primary); 
-      background: var(--bg);
-      transform: translate(-1px, -1px);
-      box-shadow: 3px 3px 0px var(--primary);
-    }
-    
-    .label { 
-      font-size: 13px; 
-      font-weight: 600; 
-      line-height: 1.3;
-      word-break: break-word;
-    }
+    .menu-item:hover { border-color: var(--primary); transform: translate(-1px, -1px); box-shadow: 3px 3px 0px var(--primary); }
+    .label { font-size: 13px; font-weight: 600; line-height: 1.3; }
   </style>
 </head>
 <body>
+  <div class="toolbar"><div id="admin-sync" class="sync-btn" onclick="syncMetadata()">🔄 Sync System Pages</div></div>
   <div id="main" class="grid">Initializing Switchboard...</div>
 
   <script>
     grist.ready({ requiredAccess: 'full' });
 
+    async function checkAdminStatus(docId) {
+      try {
+        const profile = await grist.docApi.getDocMeta(); // Get current user
+        const userEmail = profile.users[0].email.toLowerCase();
+        const sysUsers = await grist.docApi.fetchTable('SysUsers');
+        
+        const uIdx = sysUsers.Email.findIndex(e => e.toLowerCase() === userEmail);
+        if (uIdx !== -1 && sysUsers.Unlock_Structure[uIdx]) {
+          document.getElementById('admin-sync').style.display = 'block';
+        }
+      } catch (e) { console.log("Admin check skipped or failed."); }
+    }
+
+    async function syncMetadata() {
+      try {
+        const docId = await grist.docApi.getDocName();
+        const sysPages = await grist.docApi.fetchTable('_grist_Pages');
+        const sysViews = await grist.docApi.fetchTable('_grist_Views');
+        const existing = await grist.docApi.fetchTable('SysNavigationMenu');
+
+        const existingLinks = new Set(existing.Link || []);
+        const toAdd = { Section: [], Label: [], Link: [], Sort_Order: [], Columns: [] };
+
+        sysPages.id.forEach((pageId, i) => {
+          const viewRef = sysPages.viewRef[i];
+          const vIdx = sysViews.id.indexOf(viewRef);
+          const viewName = sysViews.name[vIdx];
+          const link = `/doc/${docId}/p/${pageId}`;
+
+          if (viewName && !viewName.startsWith('Grist') && !existingLinks.has(link)) {
+            toAdd.Section.push("UNASSIGNED 🛠️");
+            toAdd.Label.push(viewName);
+            toAdd.Link.push(link);
+            toAdd.Sort_Order.push(999);
+            toAdd.Columns.push(4);
+          }
+        });
+
+        if (toAdd.Label.length > 0) {
+          await grist.docApi.addRecords('SysNavigationMenu', toAdd);
+          alert(`Added ${toAdd.Label.length} new pages.`);
+          buildMenu();
+        } else { alert("Already synced."); }
+      } catch (e) { alert("Sync error. Check SysNavigationMenu table."); }
+    }
+
     async function buildMenu() {
       try {
         const docId = await grist.docApi.getDocName();
-        const main = document.getElementById('main');
-        
-        // 1. Fetch System Metadata
+        await checkAdminStatus(docId); // Show button if admin
+
         const sysPages = await grist.docApi.fetchTable('_grist_Pages');
         const sysViews = await grist.docApi.fetchTable('_grist_Views');
-        
-        // 2. Fetch User Overrides
         let overrides = { id: [] };
         try { overrides = await grist.docApi.fetchTable('SysNavigationMenu'); } catch(e) {}
 
+        const main = document.getElementById('main');
         main.innerHTML = '';
         const groups = {};
-        const handledPageIds = new Set();
+        const handledLinks = new Set();
 
-        // 3. Process Overrides (Defined in your table)
-        if (overrides.id && overrides.id.length > 0) {
-          // Set grid columns based on first entry or default
+        if (overrides.id?.length > 0) {
           document.body.style.setProperty('--cols', overrides.Columns[0] || 3);
-
           overrides.id.forEach((id, i) => {
-            const section = overrides.Section[i] || 'Modules';
-            if (!groups[section]) groups[section] = [];
-            
-            groups[section].push({
-              label: overrides.Label[i],
-              link: overrides.Link[i],
-              order: overrides.Sort_Order[i] || 99
-            });
-
-            const match = overrides.Link[i].match(/\/p\/(\d+)/);
-            if (match) handledPageIds.add(parseInt(match[1]));
+            if (overrides.Section[i] === "HIDDEN") return; // Skip hidden items
+            const sec = overrides.Section[i] || 'Modules';
+            if (!groups[sec]) groups[sec] = [];
+            groups[sec].push({ label: overrides.Label[i], link: overrides.Link[i], order: overrides.Sort_Order[i] });
+            handledLinks.add(overrides.Link[i]);
           });
         }
 
-        // 4. Process Remaining System Pages (Auto-discovery)
-        sysPages.id.forEach((pageId, i) => {
-          if (!handledPageIds.has(pageId)) {
-            const viewRef = sysPages.viewRef[i];
-            const vIdx = sysViews.id.indexOf(viewRef);
-            const viewName = sysViews.name[vIdx];
-
-            if (viewName && !viewName.startsWith('Grist')) {
-              const section = "Uncategorized ✨";
-              if (!groups[section]) groups[section] = [];
-              groups[section].push({
-                label: viewName,
-                link: `/doc/${docId}/p/${pageId}`,
-                order: 999
-              });
+        sysPages.id.forEach((pid, i) => {
+          const link = `/doc/${docId}/p/${pid}`;
+          if (!handledLinks.has(link)) {
+            const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
+            if (vName && !vName.startsWith('Grist')) {
+              if (!groups["Uncategorized ✨"]) groups["Uncategorized ✨"] = [];
+              groups["Uncategorized ✨"].push({ label: vName, link: link, order: 999 });
             }
           }
         });
 
-        // 5. Render
-        for (const section in groups) {
-          const header = document.createElement('div');
-          header.className = 'section-header';
-          header.innerHTML = section; // Allows emoji in section names
-          main.appendChild(header);
-
-          groups[section].sort((a,b) => a.order - b.order).forEach(item => {
-            const btn = document.createElement('a');
-            btn.className = 'menu-item';
-            btn.href = item.link;
-            btn.target = '_top';
-            btn.innerHTML = `<div class="label">${item.label}</div>`;
-            main.appendChild(btn);
+        for (const sec in groups) {
+          const h = document.createElement('div'); h.className = 'section-header'; h.innerHTML = sec;
+          main.appendChild(h);
+          groups[sec].sort((a,b) => a.order - b.order).forEach(item => {
+            const a = document.createElement('a'); a.className = 'menu-item'; a.href = item.link; a.target = '_top';
+            a.innerHTML = `<div class="label">${item.label}</div>`;
+            main.appendChild(a);
           });
         }
-      } catch (err) {
-        document.getElementById('main').innerHTML = "Ready for SysNavigationMenu mapping...";
-      }
+      } catch (err) { main.innerHTML = "Enable 'Full Access' in Widget settings."; }
     }
 
-    grist.onOptions((opts) => { if (opts.appearance === 'dark') document.body.classList.add('dark'); });
+    grist.onOptions(o => { if (o.appearance === 'dark') document.body.classList.add('dark'); });
     buildMenu();
-    // Auto-refresh every 30 seconds to catch new pages
-    setInterval(buildMenu, 30000); 
   </script>
 </body>
 </html>
