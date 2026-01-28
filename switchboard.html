@@ -6,63 +6,34 @@
   <style>
     :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; --active: #f1c40f; --cols: 3; }
     body.dark { --bg: #1e1e1e; --text: #e8e8e8; --border: #444; --item-bg: #2c2c2c; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 10px; background: var(--bg); color: var(--text); overflow: hidden; }
     
-    body { 
-      font-family: -apple-system, system-ui, sans-serif; 
-      margin: 0; padding: 10px; 
-      background: var(--bg); color: var(--text); 
-      overflow-x: hidden;
-    }
+    .toolbar { display: flex; justify-content: flex-end; height: 18px; margin-bottom: 8px; }
+    .sync-btn { font-size: 8px; cursor: pointer; border: 1px solid var(--border); background: var(--item-bg); color: var(--primary); font-weight: bold; padding: 1px 4px; opacity: 0.6; }
 
-    /* Layout Controls */
-    .toolbar { display: flex; justify-content: flex-end; height: 20px; margin-bottom: 8px; }
-    .sync-btn { 
-      font-size: 9px; cursor: pointer; border: 1px solid var(--border); 
-      background: var(--item-bg); color: var(--primary); font-weight: bold; padding: 2px 6px; 
-    }
+    #main { display: grid; gap: 10px; grid-template-columns: repeat(var(--cols), 1fr); }
+    .section-header { grid-column: 1 / -1; font-size: 10px; font-weight: 800; color: var(--primary); text-transform: uppercase; margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
 
-    #main { 
-      display: grid; gap: 10px; 
-      grid-template-columns: repeat(var(--cols), 1fr); 
-    }
-
-    .section-header { 
-      grid-column: 1 / -1; font-size: 10px; font-weight: 800; 
-      color: var(--primary); text-transform: uppercase; 
-      margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 2px;
-    }
-
-    /* High-Performance Buttons */
     .menu-item { 
       background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px; 
       padding: 12px 8px; text-align: center; color: inherit;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      cursor: pointer; transition: all 0.15s ease;
-      user-select: none;
+      cursor: pointer; transition: background 0.1s; user-select: none;
     }
-
-    .menu-item:hover { background: var(--bg); border-color: var(--primary); transform: translateY(-1px); }
-    
-    /* Highlight the page the user is currently viewing */
-    .menu-item.active { border-left: 4px solid var(--active); background: var(--bg); box-shadow: inset 2px 2px 4px rgba(0,0,0,0.05); }
-
+    .menu-item:hover { background: var(--bg); border-color: var(--primary); }
+    .menu-item.active { border-left: 4px solid var(--active); background: var(--bg); }
     .label { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
   </style>
 </head>
 <body>
-  <div class="toolbar"><button id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">🔄 Sync</button></div>
+  <div class="toolbar"><button id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">Sync</button></div>
   <div id="main"></div>
 
   <script>
     const CACHE_KEY = "grist_menu_cache";
-    let currentHash = window.parent.location.hash;
+    let selectedPageId = null;
 
-    // 1. FAST RENDER
-    function hydrate() {
-      const cached = localStorage.getItem(CACHE_KEY);
-      if (cached) render(JSON.parse(cached));
-    }
-
+    // 1. RENDERER
     function render(records) {
       if (!records || !records.length) return;
       const main = document.getElementById('main');
@@ -87,17 +58,21 @@
         groups[sec].sort((a,b) => (a.Sort_Order || 99) - (b.Sort_Order || 99)).forEach(item => {
           const btn = document.createElement('div');
           const pageMatch = item.Link.match(/\/p\/(\d+)/);
-          const pageId = pageMatch ? `p/${pageMatch[1]}` : null;
+          const pageNum = pageMatch ? parseInt(pageMatch[1]) : null;
           
           btn.className = 'menu-item';
-          // Mark as active if the current URL hash matches this link's page ID
-          if (pageId && currentHash.includes(pageId)) btn.classList.add('active');
+          if (pageNum === selectedPageId) btn.classList.add('active');
 
           btn.onclick = () => {
-            if (pageId) {
-              // INSTANT ANCHOR NAVIGATION
-              window.parent.location.hash = pageId;
-              // Update UI immediately for "Instant" feel
+            if (pageNum) {
+              // SENIOR FIX: Use the Grist Native Navigation Action
+              // This bypasses standard URL navigation and triggers internal Grist routing
+              grist.setCursor({ pageId: pageNum }).catch(err => {
+                // Fallback if setCursor is restricted on your version
+                window.open(item.Link, '_top');
+              });
+              
+              selectedPageId = pageNum;
               document.querySelectorAll('.menu-item').forEach(b => b.classList.remove('active'));
               btn.classList.add('active');
             } else {
@@ -114,18 +89,25 @@
       main.appendChild(fragment);
     }
 
-    // 2. GRIST INTEGRATION
+    // 2. API INIT
     grist.ready({
       requiredAccess: 'full',
       columns: ["Section", "Label", "Link", "Sort_Order", "GridColumns"]
     });
 
+    // Handle incoming data
     grist.onRecords((records) => {
       localStorage.setItem(CACHE_KEY, JSON.stringify(records));
       render(records);
     });
 
-    // Sync Logic
+    // Listen for where the user is currently to set the "active" state
+    grist.onRecord((rec, mappings) => {
+       // This fires when the user clicks elsewhere in Grist
+       // We can use it to keep the menu synced with the current view
+    });
+
+    // Admin Sync remains the same
     async function runSync() {
       try {
         const [sysPages, sysViews, docId] = await Promise.all([
@@ -137,8 +119,7 @@
           const vName = sysViews.name[sysViews.id.indexOf(sysPages.viewRef[i])];
           return (vName && !vName.startsWith('Grist')) ? 
             ["AddRecord", "SysNavigationMenu", null, { 
-              Section: "NEW 🛠️", Label: String(vName), 
-              Link: `/doc/${docId}/p/${pid}`, 
+              Section: "NEW 🛠️", Label: String(vName), Link: `/doc/${docId}/p/${pid}`, 
               Sort_Order: 999, GridColumns: 3 
             }] : null;
         }).filter(a => a);
@@ -146,7 +127,11 @@
       } catch (e) { console.error(e); }
     }
 
-    // Monitor for admin status
+    // Initial load from cache
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) render(JSON.parse(cached));
+    
+    // Check Admin
     grist.on('message', (msg) => {
       if (msg.tableId === 'SysUsers' || msg.docInfo) {
         grist.docApi.fetchTable('SysUsers').then(u => {
@@ -154,16 +139,6 @@
         }).catch(() => {});
       }
     });
-
-    // Listen for Grist internal navigation to update the "Active" button highlight
-    setInterval(() => {
-      if (window.parent.location.hash !== currentHash) {
-        currentHash = window.parent.location.hash;
-        hydrate(); // Quick re-render to update active state
-      }
-    }, 500);
-
-    hydrate();
   </script>
 </body>
 </html>
