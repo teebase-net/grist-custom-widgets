@@ -4,73 +4,71 @@
   <meta charset="utf-8">
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
   <style>
-    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; --cols: 3; }
+    :root { --primary: #5dade2; --bg: #ffffff; --text: #333; --border: #ddd; --item-bg: #fdffdf; --active: #f1c40f; --cols: 3; }
     body.dark { --bg: #1e1e1e; --text: #e8e8e8; --border: #444; --item-bg: #2c2c2c; }
     
     body { 
       font-family: -apple-system, system-ui, sans-serif; 
       margin: 0; padding: 10px; 
-      background: var(--bg); color: var(--text);
-      /* Force GPU for entire body to prevent painting lag */
-      transform: translateZ(0);
+      background: var(--bg); color: var(--text); 
+      overflow-x: hidden;
     }
 
+    /* Layout Controls */
     .toolbar { display: flex; justify-content: flex-end; height: 20px; margin-bottom: 8px; }
     .sync-btn { 
       font-size: 9px; cursor: pointer; border: 1px solid var(--border); 
-      background: var(--item-bg); color: var(--primary); font-weight: bold; padding: 2px 6px;
+      background: var(--item-bg); color: var(--primary); font-weight: bold; padding: 2px 6px; 
     }
 
-    /* Fixed Grid to prevent jumping */
     #main { 
-      display: grid; 
-      gap: 10px; 
-      grid-template-columns: repeat(var(--cols), 1fr);
-      min-height: 100vh; /* Keeps height consistent */
+      display: grid; gap: 10px; 
+      grid-template-columns: repeat(var(--cols), 1fr); 
     }
 
     .section-header { 
       grid-column: 1 / -1; font-size: 10px; font-weight: 800; 
       color: var(--primary); text-transform: uppercase; 
-      margin-top: 10px; border-bottom: 1px solid var(--border);
+      margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 2px;
     }
 
+    /* High-Performance Buttons */
     .menu-item { 
       background: var(--item-bg); border: 1px solid var(--border); border-radius: 4px; 
-      padding: 12px 8px; text-align: center; text-decoration: none; color: inherit;
+      padding: 12px 8px; text-align: center; color: inherit;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      contain: content; /* Senior optimization: prevents internal changes from affecting outer layout */
+      cursor: pointer; transition: all 0.15s ease;
+      user-select: none;
     }
 
-    .menu-item:hover { background: var(--bg); border-color: var(--primary); }
-    .label { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; }
+    .menu-item:hover { background: var(--bg); border-color: var(--primary); transform: translateY(-1px); }
+    
+    /* Highlight the page the user is currently viewing */
+    .menu-item.active { border-left: 4px solid var(--active); background: var(--bg); box-shadow: inset 2px 2px 4px rgba(0,0,0,0.05); }
+
+    .label { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
   </style>
 </head>
 <body>
-  <div class="toolbar"><button id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">Sync</button></div>
+  <div class="toolbar"><button id="admin-sync" class="sync-btn" style="display:none" onclick="runSync()">🔄 Sync</button></div>
   <div id="main"></div>
 
   <script>
-    const GristOrigin = "https://dev.teebase.net";
     const CACHE_KEY = "grist_menu_cache";
+    let currentHash = window.parent.location.hash;
 
-    // 1. INSTANT HYDRATION
-    // Load from local storage before the API even starts
+    // 1. FAST RENDER
     function hydrate() {
       const cached = localStorage.getItem(CACHE_KEY);
-      if (cached) {
-        render(JSON.parse(cached));
-      }
+      if (cached) render(JSON.parse(cached));
     }
 
     function render(records) {
       if (!records || !records.length) return;
-      
       const main = document.getElementById('main');
       const fragment = document.createDocumentFragment();
       const groups = {};
 
-      // Set columns instantly
       document.documentElement.style.setProperty('--cols', records[0].GridColumns || 3);
 
       records.forEach(rec => {
@@ -87,13 +85,28 @@
         fragment.appendChild(h);
 
         groups[sec].sort((a,b) => (a.Sort_Order || 99) - (b.Sort_Order || 99)).forEach(item => {
-          const a = document.createElement('a');
-          a.className = 'menu-item';
-          const path = item.Link.startsWith('/') ? item.Link : '/' + item.Link;
-          a.href = item.Link.startsWith('http') ? item.Link : GristOrigin + path;
-          a.target = '_top';
-          a.innerHTML = `<div class="label">${item.Label}</div>`;
-          fragment.appendChild(a);
+          const btn = document.createElement('div');
+          const pageMatch = item.Link.match(/\/p\/(\d+)/);
+          const pageId = pageMatch ? `p/${pageMatch[1]}` : null;
+          
+          btn.className = 'menu-item';
+          // Mark as active if the current URL hash matches this link's page ID
+          if (pageId && currentHash.includes(pageId)) btn.classList.add('active');
+
+          btn.onclick = () => {
+            if (pageId) {
+              // INSTANT ANCHOR NAVIGATION
+              window.parent.location.hash = pageId;
+              // Update UI immediately for "Instant" feel
+              document.querySelectorAll('.menu-item').forEach(b => b.classList.remove('active'));
+              btn.classList.add('active');
+            } else {
+              window.open(item.Link, '_top');
+            }
+          };
+
+          btn.innerHTML = `<div class="label">${item.Label}</div>`;
+          fragment.appendChild(btn);
         });
       });
 
@@ -101,28 +114,18 @@
       main.appendChild(fragment);
     }
 
-    // 2. BACKGROUND API SYNC
+    // 2. GRIST INTEGRATION
     grist.ready({
       requiredAccess: 'full',
       columns: ["Section", "Label", "Link", "Sort_Order", "GridColumns"]
     });
 
     grist.onRecords((records) => {
-      // Save to cache for next load
       localStorage.setItem(CACHE_KEY, JSON.stringify(records));
-      // Re-render only if data has actually changed (prevents flickers)
       render(records);
     });
 
-    // Check Admin in background
-    grist.on('message', (msg) => {
-      if (msg.tableId === 'SysUsers' || msg.docInfo) {
-        grist.docApi.fetchTable('SysUsers').then(u => {
-          if (u.Unlock_Structure.some(v => v === true)) document.getElementById('admin-sync').style.display = 'block';
-        }).catch(() => {});
-      }
-    });
-
+    // Sync Logic
     async function runSync() {
       try {
         const [sysPages, sysViews, docId] = await Promise.all([
@@ -143,7 +146,23 @@
       } catch (e) { console.error(e); }
     }
 
-    // Initialize
+    // Monitor for admin status
+    grist.on('message', (msg) => {
+      if (msg.tableId === 'SysUsers' || msg.docInfo) {
+        grist.docApi.fetchTable('SysUsers').then(u => {
+          if (u.Unlock_Structure.some(v => v === true)) document.getElementById('admin-sync').style.display = 'block';
+        }).catch(() => {});
+      }
+    });
+
+    // Listen for Grist internal navigation to update the "Active" button highlight
+    setInterval(() => {
+      if (window.parent.location.hash !== currentHash) {
+        currentHash = window.parent.location.hash;
+        hydrate(); // Quick re-render to update active state
+      }
+    }, 500);
+
     hydrate();
   </script>
 </body>
